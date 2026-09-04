@@ -175,7 +175,7 @@ def test_profile_env_for_background_worker_uses_legacy_skill_module_patching(mon
 
 
 def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path, monkeypatch):
-    """Streaming must install the worker home override and clear it in teardown."""
+    """Streaming must install the worker home and secret scopes, then clear both."""
 
     import api.streaming as _streaming
 
@@ -185,6 +185,13 @@ def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path,
     _workspace.mkdir()
     _home = tmp_path / "alpha"
     _home.mkdir()
+    (_home / ".env").write_text(
+        "ANTHROPIC_API_KEY=profile-alpha-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secret_scope = pytest.importorskip("agent.secret_scope")
+    _scope_before = secret_scope.current_secret_scope()
 
     class _Session:
         def __init__(self):
@@ -258,6 +265,15 @@ def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path,
 
         def run_conversation(self, *args, **kwargs):
             _events["run_conversation"] = True
+            _events["secret_scope_during_run"] = dict(
+                secret_scope.current_secret_scope() or {}
+            )
+            # Simulate a sibling tab replacing the process-global provider key
+            # after this turn started. Scoped resolution must stay on alpha.
+            os.environ["ANTHROPIC_API_KEY"] = "profile-beta-key"
+            _events["anthropic_key_during_run"] = secret_scope.get_secret(
+                "ANTHROPIC_API_KEY"
+            )
             raise RuntimeError("streaming test sentinel")
 
     def _get_ai_agent():
@@ -317,6 +333,11 @@ def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path,
     assert _events.get("set_override_home") == str(_home)
     assert _events.get("reset_override") == ("sentinel-module", None, True)
     assert _events.get("run_conversation") is True
+    assert _events.get("anthropic_key_during_run") == "profile-alpha-key"
+    assert _events.get("secret_scope_during_run", {}).get(
+        "ANTHROPIC_API_KEY"
+    ) == "profile-alpha-key"
+    assert secret_scope.current_secret_scope() is _scope_before
     assert _events.get("discover_mcp_tools", 0) == 1
     assert _events.get("set_thread_env") is True
     assert _events.get("patch_skill_home_modules", 0) == 0

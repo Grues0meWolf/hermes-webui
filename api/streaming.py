@@ -22,6 +22,7 @@ import time
 import traceback
 import copy
 import inspect
+import importlib
 from pathlib import Path
 from typing import Optional
 
@@ -9128,6 +9129,7 @@ def _run_agent_streaming(
     _streaming_cron_profile_home_token = None
     _turn_pending_source = 'webui'
     _streaming_hermes_home_override_ctx = (None, None, False)
+    _streaming_secret_scope_ctx = (None, None)
     _streaming_skill_home_snapshot = None
     _restore_streaming_skill_home_modules = False
     _acquired_streaming_skill_home_patch_lock = False
@@ -9220,6 +9222,33 @@ def _run_agent_streaming(
             restore_skill_home_modules = None
             _skill_modules_support_profile_home = None
             _SKILL_HOME_MODULE_PATCH_LOCK = None
+
+        # Pin provider credential reads to this session's profile for the
+        # entire turn. Hermes re-resolves Anthropic credentials immediately
+        # before requests, so the process-env mirror below is not sufficient:
+        # another profile's concurrent stream can replace it mid-turn.
+        try:
+            _streaming_secret_scope = importlib.import_module("agent.secret_scope")
+        except ImportError:
+            # Older hermes-agent releases predate profile-scoped secrets.
+            _streaming_secret_scope = None
+        if _streaming_secret_scope is not None:
+            try:
+                _streaming_secret_scope_token = (
+                    _streaming_secret_scope.set_secret_scope(
+                        _streaming_secret_scope.build_profile_secret_scope(
+                            Path(_profile_home)
+                        )
+                    )
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Unable to establish the selected profile's credential scope"
+                ) from exc
+            _streaming_secret_scope_ctx = (
+                _streaming_secret_scope,
+                _streaming_secret_scope_token,
+            )
 
         # Profile-aware provider/model enrichment: when the session belongs
         # to a profile that specifies model.provider and model.default, use
@@ -12808,6 +12837,22 @@ def _run_agent_streaming(
         if _acquired_streaming_skill_home_patch_lock:
             _SKILL_HOME_MODULE_PATCH_LOCK.release()
             _acquired_streaming_skill_home_patch_lock = False
+        _streaming_secret_scope, _streaming_secret_scope_token = (
+            _streaming_secret_scope_ctx
+        )
+        if (
+            _streaming_secret_scope is not None
+            and _streaming_secret_scope_token is not None
+        ):
+            try:
+                _streaming_secret_scope.reset_secret_scope(
+                    _streaming_secret_scope_token
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to reset streaming profile secret scope",
+                    exc_info=True,
+                )
         _reset_streaming_hermes_home_override(*_streaming_hermes_home_override_ctx)
         # xsession wakeup misroute root fix (Option 1): restore the per-turn
         # session-identity context-locals (reset-token semantics). MUST run on
