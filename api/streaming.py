@@ -9238,7 +9238,8 @@ def _run_agent_streaming(
                     _streaming_secret_scope.set_secret_scope(
                         _streaming_secret_scope.build_profile_secret_scope(
                             Path(_profile_home)
-                        )
+                        ),
+                        authoritative=True,
                     )
                 )
             except Exception as exc:

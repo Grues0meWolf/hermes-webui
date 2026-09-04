@@ -271,8 +271,12 @@ def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path,
             # Simulate a sibling tab replacing the process-global provider key
             # after this turn started. Scoped resolution must stay on alpha.
             os.environ["ANTHROPIC_API_KEY"] = "profile-beta-key"
+            os.environ["OPENAI_API_KEY"] = "profile-beta-only-key"
             _events["anthropic_key_during_run"] = secret_scope.get_secret(
                 "ANTHROPIC_API_KEY"
+            )
+            _events["missing_openai_key_during_run"] = secret_scope.get_secret(
+                "OPENAI_API_KEY"
             )
             raise RuntimeError("streaming test sentinel")
 
@@ -337,6 +341,7 @@ def test_run_agent_streaming_installs_and_resets_profile_home_override(tmp_path,
     assert _events.get("secret_scope_during_run", {}).get(
         "ANTHROPIC_API_KEY"
     ) == "profile-alpha-key"
+    assert _events.get("missing_openai_key_during_run") is None
     assert secret_scope.current_secret_scope() is _scope_before
     assert _events.get("discover_mcp_tools", 0) == 1
     assert _events.get("set_thread_env") is True
